@@ -1,0 +1,203 @@
+use libc::*;
+use std::{ptr, mem, str};
+use std::ffi::CStr;
+use num_format::{Locale, ToFormattedString};
+use std::time::Instant;
+
+
+#[repr(C)]
+#[derive(Debug)]
+pub enum EfxMarketType {
+    KOSPI = 0, KOSDAQ = 1
+ }
+
+#[repr(C)]
+#[derive(Debug)]
+pub enum EfxMarketWarning {
+    None = 0,
+    Caution = 1,
+    Warning = 2,
+    Danger = 3
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct EfxInvestInfo {
+	is_suspension:      bool,		// 거래정지
+	is_clearance_sale:  bool,  		// 정리매매
+	is_management:      bool,		// 관리종목
+	market_warn_code:   EfxMarketWarning,   // 시장 경고 코드
+	is_market_warning:  bool,		// 경고 예고 여부
+	is_insincerity_notice:bool, 	// 불성실 공시 여부
+	is_backdoor_listing:bool,		// 우회상장 여부
+	is_creditable:      bool,		// 신용주문 가능
+	margin_rate:        i16,		// 증거금 비율
+	par_value:          i32,		// 액면가
+	listing_date:       [u8; 9],	// 상장 날짜
+	listing_count:      i64,		// 상장 주수
+	is_new_listing:     bool,		// 신규상장 여부
+	capital:            i64,		// 자본금
+	is_short_selling:   bool,		// 공매도주문가능 여부
+	is_abnormal_rise:   bool,		// 이상급등종목 여부
+	sales:              i32,		// 매출액
+	operating_profit:   i32,		// 영업이익
+	ordinary_profit:    i32,		// 경상이익
+	net_income:         i32,		// 당기순이익
+	roe:                f32,		// 자기자본이익률
+	base_year_month:    [u8; 9],	// 기준년월
+	preday_market_cap:  u32,		// 전일기준 시가총액(단위: 억원)
+    is_credit_limt_over:bool,		// 회사신용한도초과 여부
+	is_loanable:        bool,		// 담보대출가능 여부
+	is_stock_loanable:  bool,		// 대주가능 여부
+}
+
+#[repr(C)]
+pub struct EfxStockMasterItem {
+	seq_no:         c_int,
+	stock_code:     [u8; 10],
+	standard_code:  [u8; 13],
+	stock_name:     [u8; 61],
+	market_type:    EfxMarketType,
+    is_venture:     bool,
+	is_kospi50:     bool,
+	is_kospi100:    bool,
+	kospi200_sector:i8,             // KOSPI200 섹터업종
+	is_krx100:      bool,
+	is_krx300:      bool,
+	is_etf:         bool,
+    is_acquisition: bool,           // 기업인수목적회사 여부
+	invest_info:    EfxInvestInfo,
+}
+
+type EfxEventCB = unsafe extern "C" fn(*const c_void, c_uint, *const c_char);
+type EfxSysMsgCB = unsafe extern "C" fn(*const c_void, c_uint, c_int);
+
+#[link(name = "EfxMfc", kind = "static")]
+#[allow(dead_code)]
+extern {
+    fn efxInit(efxDir:*const u8, sysMsgCB:EfxSysMsgCB) -> c_int;
+    fn efxExit();
+    fn efxProcessMessage(milliSec:c_uint) -> c_int;
+	fn efxMessageLoop();
+    fn efxQuit(exit_code:c_int);
+    fn efxFindStockMaster(stock_code:*const u8) -> *const EfxStockMasterItem;
+    fn efxGetStockMaster(seq_no:c_int) -> *const EfxStockMasterItem;
+
+    fn efxNewControl(id:c_uint, recvData:Option<EfxEventCB>, recvRealData:Option<EfxEventCB>, recvError:Option<EfxEventCB>) -> *const c_void;
+    fn efxGetAccountCount() -> c_int;
+    fn efxGetAccount(idx:c_int, szAccount:*mut u8) -> c_int;
+    fn efxGetAccountBrcode(acnt_no:*const u8, brcode:*mut u8) -> c_int;
+	fn efxGetEncryptPassword(pwd:*const u8, enc_pwd:*mut u8) -> c_int;
+    fn efxAboutBox();
+
+    fn efxSetSingleData(handle:*const c_void, field_idx:c_int, data:*const u8);
+    fn efxRequestData(handle:*const c_void, qry_name:*const u8, param:*const u8);
+    fn efxIsMoreNextData(handle:*const c_void) -> c_int;
+	fn efxRequestNextData(handle:*const c_void, qry_name:*const u8);
+
+	fn efxGetSingleFieldCount(handle:*const c_void) -> c_int;
+	fn efxGetSingleData(handle:*const c_void, s_data:*mut u8, field_idx:c_int, attr_type:c_int) -> c_int;
+}
+
+#[allow(non_snake_case)]
+unsafe extern "C" fn OnRecvSysMsg(_handle:*const c_void, ctrl_id:c_uint, sys_msg:c_int)
+{
+    println!("<== OnRecvSysMsg({}, {})", ctrl_id, sys_msg);
+}
+
+static mut SIG_RECV_DATA: bool = false;
+
+#[allow(non_snake_case)]
+unsafe extern "C" fn OnRecvData(handle:*const c_void, ctrl_id:c_uint, param:*const c_char)
+{
+    let str_param = CStr::from_ptr(param);
+    let stock_code = str_param.to_str().unwrap();
+    println!("<-- OnRecvData({}, \"{}\")", ctrl_id, stock_code);
+    let _field_cnt = efxGetSingleFieldCount(handle);
+    //println!("field_cnt = {}", field_cnt);
+    let mut data:Vec<u8> = Vec::with_capacity(256);
+    data.resize(data.capacity() - 1, 0);
+    let len = efxGetSingleData(handle, data.as_mut_ptr(), 11, 0);
+    let mut s_data = String::from_utf8_lossy(&data).to_string();
+    s_data.truncate(len as usize);
+    let cur_price = s_data.parse::<i32>().unwrap();
+    let mst = efxFindStockMaster(stock_code.as_ptr());
+    let mut data2:Vec<u8> = (*mst).stock_name.to_vec();
+    let idx_null = data2.iter().position(|&x| x == 0).unwrap();
+    data2.resize(idx_null, 0);
+    let stock_name = String::from_utf8_lossy(&data2);
+    println!("{} {} {:?} 현재가: {}원", stock_code, stock_name, (*mst).market_type, cur_price.to_formatted_string(&Locale::en));
+    println!("seqNo: {}, 신용가능: {}, 증거금 비율: {}, 액면가: {}, 상장주식: {}, 시장경고: {:?}", (*mst).seq_no,
+        (*mst).invest_info.is_creditable, (*mst).invest_info.margin_rate, (*mst).invest_info.par_value, (*mst).invest_info.listing_count, (*mst).invest_info.market_warn_code);
+    let v_ym = (*mst).invest_info.base_year_month.to_vec();
+    let base_ym = str::from_utf8(&v_ym).unwrap();
+    println!("매출액: {}, 영업이익: {}, 당기순이익: {}, ROE: {}, 기준년월: {}, 자본금: {}",
+        (*mst).invest_info.sales, (*mst).invest_info.operating_profit, (*mst).invest_info.net_income, (*mst).invest_info.roe, base_ym, (*mst).invest_info.capital);
+    //println!("{:?}", (*mst).invest_info);
+    println!();
+    SIG_RECV_DATA = true;
+}
+
+#[allow(non_snake_case)]
+#[allow(dead_code)]
+unsafe extern "C" fn OnRecvRealData(_handle:*const c_void, ctrl_id:c_uint, _param:*const c_char)
+{
+    println!("OnRecvRealData({})", ctrl_id);
+}
+
+fn wait_recv_data() {
+    unsafe {
+        while !SIG_RECV_DATA {
+            efxProcessMessage(1);
+        }
+        SIG_RECV_DATA = false;
+    }
+}
+
+fn main() {
+    println!("Hello, world! {:?}, {:?}", mem::size_of::<EfxInvestInfo>(), mem::size_of::<EfxStockMasterItem>());
+
+    let mut s = String::new();
+    unsafe {
+        let start = Instant::now();
+        let _ret = efxInit(ptr::null(), OnRecvSysMsg);
+        println!("\nefxInit() elapsed time: {:?}", start.elapsed());
+        let acc_cnt = efxGetAccountCount();
+        println!("AccountCount = {}", acc_cnt);
+        /*s.push_str("0123456789\x00");
+        for i in 0..acc_cnt {
+            efxGetAccount(i, s.as_mut_ptr());
+            println!("account[{}]: {}", i, s);
+        }*/
+        s.clear();
+        for _i in 0..100 { s.push('\0') };
+        let len = efxGetEncryptPassword("12345\x00".as_ptr(), s.as_mut_ptr());
+        s.truncate(len as usize);
+        println!("Encrypt: {} (len: {})\n", s, len);
+        let efx1 = efxNewControl(100, Some(OnRecvData), None, None);
+        let mut stock_code = String::from("254120\x00");
+        efxSetSingleData(efx1, 0, "J\x00".as_ptr());
+        efxSetSingleData(efx1, 1, stock_code.as_ptr());
+        efxRequestData(efx1, "SCP\x00".as_ptr(), stock_code.as_ptr());
+        println!("--> RequestData(\"SCP\", \"{}\")", stock_code);
+        wait_recv_data();
+        stock_code = String::from("081000\x00");
+        efxSetSingleData(efx1, 0, "J\x00".as_ptr());
+        efxSetSingleData(efx1, 1, stock_code.as_ptr());
+        efxRequestData(efx1, "SCP\x00".as_ptr(), stock_code.as_ptr());
+        println!("--> RequestData(\"SCP\", \"{}\")", stock_code);
+        wait_recv_data();
+        stock_code = String::from("005930\x00");
+        efxSetSingleData(efx1, 0, "J\x00".as_ptr());
+        efxSetSingleData(efx1, 1, stock_code.as_ptr());
+        efxRequestData(efx1, "SCP\x00".as_ptr(), stock_code.as_ptr());
+        println!("--> RequestData(\"SCP\", \"{}\")", stock_code);
+        wait_recv_data();
+        //efxAboutBox();
+        efxQuit(0);
+    };
+    unsafe {
+        efxMessageLoop();
+        efxExit();
+    };
+}

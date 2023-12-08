@@ -1,0 +1,11 @@
+[package]
+name = "sample1"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+libc = "0.2.137"
+num-format = "0.4.3"
+#widestring = "1.0.2"
