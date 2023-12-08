@@ -17,7 +17,8 @@ use efx::utils::*;
 ...
 
 fn main() {
-    println!("Hello, world! {:?}, {:?}", mem::size_of::<efx::InvestInfo>(), mem::size_of::<efx::StockMasterItem>());
+    println!("Hello, world! {:?}, {:?}",
+        mem::size_of::<efx::InvestInfo>(), mem::size_of::<efx::StockMasterItem>());
     let str_cmd = efx::exec_cmd("ping -n 1 192.168.0.1", u32::MAX);
     println!("efx::exec_cmd: {}", str_cmd);
     //efx::launch_app("C:\\eFriend Expert\\efriendexpert\\efexpertviewer.exe", "", false, false, 5);
