@@ -1,8 +1,0 @@
-[package]
-name = "sample1"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-libc = "0.2.137"
-num-format = "0.4.3"
